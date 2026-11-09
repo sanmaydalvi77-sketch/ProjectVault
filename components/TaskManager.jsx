@@ -216,6 +216,12 @@ const canDeleteTasks = ["owner", "admin"].includes(
   currentMember?.role
 );
 
+const canManageTasks = [
+  "owner",
+  "admin",
+  "contributor",
+].includes(currentMember?.role);
+
   const filteredTasks =
     filter === "all"
       ? tasks
@@ -308,6 +314,8 @@ const canDeleteTasks = ["owner", "admin"].includes(
         ))}
       </div>
 
+{canManageTasks && (
+  <>
       {/* Create task form */}
       <div className="rounded-2xl border border-white/10 bg-white/5 p-5 md:p-6">
         <h3 className="text-lg font-semibold text-white">
@@ -449,6 +457,8 @@ const canDeleteTasks = ["owner", "admin"].includes(
           </button>
         </form>
       </div>
+       </>
+)}
 
       {/* Task list */}
       <div>
@@ -521,6 +531,8 @@ const canDeleteTasks = ["owner", "admin"].includes(
                   </div>
 
                   <div className="flex min-w-[170px] flex-col gap-3">
+                    {canManageTasks && (
+  <>
                     <select
                       value={task.status}
                       onChange={(event) => {
@@ -578,6 +590,8 @@ const canDeleteTasks = ["owner", "admin"].includes(
                         </option>
                       ))}
                     </select>
+                    </>
+)}
 
                     {canDeleteTasks && (
   <button
