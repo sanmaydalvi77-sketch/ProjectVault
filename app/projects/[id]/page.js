@@ -3,6 +3,8 @@ import Link from "next/link";
 import { redirect, notFound } from "next/navigation";
 import { createClient } from "@/lib/supabase/server";
 import WorkspaceShell from "@/components/WorkspaceShell";
+import TaskManager from "@/components/TaskManager";
+import ProjectMembers from "@/components/ProjectMembers";
 
 export default async function ProjectDetailsPage({ params }) {
   const { id } = await params;
@@ -221,6 +223,31 @@ export default async function ProjectDetailsPage({ params }) {
             ))}
           </div>
         </section>
+
+        {/* Project Task Management */}
+        <section className="mb-11 rounded-2xl border border-slate-800 bg-slate-950/40 p-5 md:p-7">
+          <div className="mb-6">
+            <p className="text-xs font-semibold uppercase tracking-[0.18em] text-indigo-400">
+              Work continuity
+            </p>
+
+            <h2 className="mt-2 text-2xl font-bold">
+              Project execution center
+            </h2>
+
+            <p className="mt-2 text-sm leading-6 text-slate-500">
+              Assign responsibilities, track progress, identify blockers
+              and keep every contributor aligned.
+            </p>
+          </div>
+
+          <TaskManager projectId={id} />
+        </section>
+
+            {/* Project Member Management */}
+<section className="mt-8">
+  <ProjectMembers projectId={project.id} />
+</section>
 
         {/* Workspace Tools */}
         <section className="mb-11">
