@@ -21,6 +21,7 @@ const PRIORITIES = [
 export default function TaskManager({ projectId }) {
   const [tasks, setTasks] = useState([]);
   const [members, setMembers] = useState([]);
+  const [currentUserId, setCurrentUserId] = useState("");
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
@@ -43,6 +44,11 @@ export default function TaskManager({ projectId }) {
 
     try {
       const supabase = createClient();
+      const {
+  data: { user },
+} = await supabase.auth.getUser();
+
+setCurrentUserId(user?.id || "");
 
       const [taskResponse, memberResponse] = await Promise.all([
         fetch(`/api/tasks?projectId=${projectId}`),
@@ -201,6 +207,14 @@ export default function TaskManager({ projectId }) {
       setError(err.message);
     }
   }
+
+const currentMember = members.find(
+  (member) => member.user_id === currentUserId
+);
+
+const canDeleteTasks = ["owner", "admin"].includes(
+  currentMember?.role
+);
 
   const filteredTasks =
     filter === "all"
@@ -565,13 +579,15 @@ export default function TaskManager({ projectId }) {
                       ))}
                     </select>
 
-                    <button
-                      type="button"
-                      onClick={() => deleteTask(task.id)}
-                      className="rounded-lg border border-red-500/20 px-3 py-2 text-sm text-red-300 transition hover:bg-red-500/10"
-                    >
-                      Delete task
-                    </button>
+                    {canDeleteTasks && (
+  <button
+    type="button"
+    onClick={() => deleteTask(task.id)}
+    className="rounded-lg border border-red-500/20 px-3 py-2 text-sm text-red-300 transition hover:bg-red-500/10"
+  >
+    Delete task
+  </button>
+)}
                   </div>
                 </div>
               </div>
