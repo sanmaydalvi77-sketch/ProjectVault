@@ -5,8 +5,8 @@ import { createClient } from "@/lib/supabase/server";
 
 export const runtime = "nodejs";
 
-const CHUNK_SIZE = 30000;
-const CHUNK_OVERLAP = 1000;
+const CHUNK_SIZE = 60000;
+const CHUNK_OVERLAP = 500;
 const MAX_DOCUMENT_SIZE = 500000;
 
 const claimSchema = {
@@ -247,9 +247,11 @@ Rules:
 7. Never fabricate a page number or section heading.
 8. If a location cannot be identified, use "not available".
 9. Ignore generic statements that do not help understand project continuity.
-10. Include decisions, milestones, risks, dependencies, owners, metrics, and requirements where present.
-11. If this chunk contains no meaningful factual claims, return an empty claims array.
-12. Do not refer to information that is not present in this chunk.
+10. Prioritise decisions, milestones, risks, dependencies, owners, metrics, and requirements.
+11. Extract a maximum of 8 high-value claims from each chunk.
+12. Avoid repetitive, generic, or low-value claims.
+13. If this chunk contains no meaningful factual claims, return an empty claims array.
+14. Do not refer to information that is not present in this chunk.
 
 Document name: ${document.file_name}
 

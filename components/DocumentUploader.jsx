@@ -19,6 +19,7 @@ export default function DocumentUploader({ projectId }) {
 
   const supabase = createClient();
 
+  // Load documents from Supabase Storage and GitHub imports
   async function loadDocuments() {
     setLoading(true);
     setError("");
@@ -36,6 +37,7 @@ export default function DocumentUploader({ projectId }) {
 
     const folderPath = `${user.id}/${projectId}`;
 
+    // Get uploaded files from Supabase Storage
     const { data, error: listError } = await supabase.storage
       .from("project-documents")
       .list(folderPath, {
@@ -43,11 +45,44 @@ export default function DocumentUploader({ projectId }) {
         sortBy: { column: "created_at", order: "desc" },
       });
 
+    // Get GitHub imports from project_documents table
+    const {
+      data: githubRows,
+      error: githubError,
+    } = await supabase
+      .from("project_documents")
+      .select("id, file_name, storage_path, extracted_at")
+      .eq("project_id", projectId)
+      .eq("owner_id", user.id)
+      .like("storage_path", "github/%");
+
+    const storageDocuments = (data || [])
+      .filter((item) => item.id)
+      .map((item) => ({
+        ...item,
+        isGitHub: false,
+      }));
+
+    const githubDocuments = (githubRows || []).map((row) => ({
+      id: row.id,
+      name: row.file_name,
+      created_at: row.extracted_at,
+      metadata: null,
+      isGitHub: true,
+    }));
+
     if (listError) {
       setError(listError.message);
-    } else {
-      setDocuments((data || []).filter((item) => item.id));
+    } else if (githubError) {
+      setError(
+        "Unable to load GitHub imports: " + githubError.message
+      );
     }
+
+    setDocuments([
+      ...githubDocuments,
+      ...storageDocuments,
+    ]);
 
     setLoading(false);
   }
@@ -56,6 +91,7 @@ export default function DocumentUploader({ projectId }) {
     loadDocuments();
   }, [projectId]);
 
+  // Validate uploaded files
   function validateFile(file) {
     if (!file) return false;
 
@@ -81,9 +117,11 @@ export default function DocumentUploader({ projectId }) {
     setError("");
     setMessage("");
     setSelectedFile(file);
+
     return true;
   }
 
+  // Upload document
   async function handleUpload(event) {
     event.preventDefault();
 
@@ -129,7 +167,10 @@ export default function DocumentUploader({ projectId }) {
       return;
     }
 
-    setMessage("Document uploaded successfully! You can now extract and analyze it.");
+    setMessage(
+      "Document uploaded successfully! You can now extract and analyze it."
+    );
+
     setSelectedFile(null);
     setFileInputKey((current) => current + 1);
 
@@ -138,6 +179,7 @@ export default function DocumentUploader({ projectId }) {
     setUploading(false);
   }
 
+  // Extract text from uploaded documents
   async function handleExtract(document) {
     setExtractingDocument(document.name);
     setExtractedText("");
@@ -164,7 +206,9 @@ export default function DocumentUploader({ projectId }) {
         result = JSON.parse(responseText);
       } catch {
         throw new Error(
-          `Invalid API response. Status: ${response.status}. ${responseText.slice(0, 300) || "Empty response"}`
+          `Invalid API response. Status: ${response.status}. ${
+            responseText.slice(0, 300) || "Empty response"
+          }`
         );
       }
 
@@ -184,6 +228,7 @@ export default function DocumentUploader({ projectId }) {
     }
   }
 
+  // Analyze uploaded documents or GitHub imports
   async function handleAnalyze(document) {
     setAnalyzingDocument(document.name);
     setError("");
@@ -217,6 +262,7 @@ export default function DocumentUploader({ projectId }) {
     }
   }
 
+  // Download uploaded files
   async function handleDownload(document) {
     setError("");
 
@@ -257,6 +303,7 @@ export default function DocumentUploader({ projectId }) {
 
   function formatSize(bytes) {
     if (!bytes) return "Unknown size";
+
     return bytes < 1024 * 1024
       ? `${(bytes / 1024).toFixed(1)} KB`
       : `${(bytes / (1024 * 1024)).toFixed(2)} MB`;
@@ -267,9 +314,11 @@ export default function DocumentUploader({ projectId }) {
 
     if (extension === "pdf") return "PDF";
     if (extension === "md") return "MARKDOWN";
+
     return "TEXT";
   }
 
+  // Drag and drop
   function handleDrop(event) {
     event.preventDefault();
     setDragActive(false);
@@ -281,7 +330,10 @@ export default function DocumentUploader({ projectId }) {
     }
   }
 
-  const busy = uploading || extractingDocument !== "" || analyzingDocument !== "";
+  const busy =
+    uploading ||
+    extractingDocument !== "" ||
+    analyzingDocument !== "";
 
   return (
     <section className="mt-8 space-y-8">
@@ -297,8 +349,9 @@ export default function DocumentUploader({ projectId }) {
         </h2>
 
         <p className="mt-2 max-w-2xl text-sm leading-6 text-slate-400">
-          Upload your project files, extract their content and use AI to
-          identify important project knowledge.
+          Upload your project files, connect GitHub repositories,
+          extract their content and use AI to identify important
+          project knowledge.
         </p>
       </div>
 
@@ -325,7 +378,9 @@ export default function DocumentUploader({ projectId }) {
           </div>
 
           <h3 className="mt-5 text-lg font-bold text-white">
-            {dragActive ? "Drop your file here" : "Upload project documents"}
+            {dragActive
+              ? "Drop your file here"
+              : "Upload project documents"}
           </h3>
 
           <p className="mt-2 text-sm text-slate-500">
@@ -355,10 +410,12 @@ export default function DocumentUploader({ projectId }) {
           <div className="mt-5 flex flex-wrap items-center justify-between gap-4 rounded-xl border border-blue-500/20 bg-blue-500/5 p-4">
             <div className="flex min-w-0 items-center gap-3">
               <span className="text-2xl">📄</span>
+
               <div className="min-w-0">
                 <p className="break-all text-sm font-semibold text-white">
                   {selectedFile.name}
                 </p>
+
                 <p className="mt-1 text-xs text-slate-500">
                   {formatSize(selectedFile.size)}
                 </p>
@@ -410,15 +467,16 @@ export default function DocumentUploader({ projectId }) {
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div>
             <h3 className="text-xl font-bold text-white">
-              Uploaded Documents
+              Project Sources
             </h3>
+
             <p className="mt-1 text-sm text-slate-500">
-              Your project's source material.
+              Uploaded documents and imported GitHub repositories.
             </p>
           </div>
 
           <span className="rounded-full border border-slate-700 bg-slate-950 px-3 py-1.5 text-xs font-semibold text-slate-300">
-            {documents.length} files
+            {documents.length} sources
           </span>
         </div>
 
@@ -429,12 +487,14 @@ export default function DocumentUploader({ projectId }) {
         ) : documents.length === 0 ? (
           <div className="mt-6 rounded-xl border border-dashed border-slate-700 p-9 text-center">
             <div className="text-3xl">📂</div>
+
             <h4 className="mt-4 font-semibold text-white">
               No documents yet
             </h4>
+
             <p className="mt-2 text-sm text-slate-500">
-              Upload your first source document to begin building your
-              project's knowledge base.
+              Upload your first source document or import a GitHub
+              repository to begin building your project's knowledge base.
             </p>
           </div>
         ) : (
@@ -447,7 +507,7 @@ export default function DocumentUploader({ projectId }) {
                 <div className="flex flex-col gap-4 xl:flex-row xl:items-center xl:justify-between">
                   <div className="flex min-w-0 items-center gap-4">
                     <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-xl bg-blue-500/10 text-2xl">
-                      📄
+                      {document.isGitHub ? "🐙" : "📄"}
                     </div>
 
                     <div className="min-w-0">
@@ -456,34 +516,49 @@ export default function DocumentUploader({ projectId }) {
                       </h4>
 
                       <div className="mt-2 flex flex-wrap items-center gap-2">
-                        <span className="rounded-md bg-blue-500/10 px-2 py-1 text-[10px] font-bold tracking-wide text-blue-400">
-                          {getFileType(document.name)}
+                        <span
+                          className={`rounded-md px-2 py-1 text-[10px] font-bold tracking-wide ${
+                            document.isGitHub
+                              ? "bg-purple-500/10 text-purple-400"
+                              : "bg-blue-500/10 text-blue-400"
+                          }`}
+                        >
+                          {document.isGitHub
+                            ? "GITHUB REPOSITORY"
+                            : getFileType(document.name)}
                         </span>
 
                         <span className="text-xs text-slate-600">
-                          {formatSize(document.metadata?.size)}
+                          {document.isGitHub
+                            ? "Imported source"
+                            : formatSize(document.metadata?.size)}
                         </span>
 
                         <span className="text-xs text-slate-600">
                           {document.created_at
-                            ? new Date(document.created_at).toLocaleDateString("en-IN")
+                            ? new Date(
+                                document.created_at
+                              ).toLocaleDateString("en-IN")
                             : ""}
                         </span>
                       </div>
                     </div>
                   </div>
 
+                  {/* Document Actions */}
                   <div className="flex flex-wrap gap-2">
-                    <button
-                      type="button"
-                      onClick={() => handleExtract(document)}
-                      disabled={busy}
-                      className="rounded-lg border border-emerald-500/20 bg-emerald-500/10 px-3 py-2 text-xs font-semibold text-emerald-400 transition hover:bg-emerald-500/20 disabled:opacity-40"
-                    >
-                      {extractingDocument === document.name
-                        ? "Extracting..."
-                        : "Extract Text"}
-                    </button>
+                    {!document.isGitHub && (
+                      <button
+                        type="button"
+                        onClick={() => handleExtract(document)}
+                        disabled={busy}
+                        className="rounded-lg border border-emerald-500/20 bg-emerald-500/10 px-3 py-2 text-xs font-semibold text-emerald-400 transition hover:bg-emerald-500/20 disabled:opacity-40"
+                      >
+                        {extractingDocument === document.name
+                          ? "Extracting..."
+                          : "Extract Text"}
+                      </button>
+                    )}
 
                     <button
                       type="button"
@@ -496,14 +571,16 @@ export default function DocumentUploader({ projectId }) {
                         : "Analyze with AI"}
                     </button>
 
-                    <button
-                      type="button"
-                      onClick={() => handleDownload(document)}
-                      disabled={busy}
-                      className="rounded-lg border border-slate-700 px-3 py-2 text-xs font-semibold text-slate-300 transition hover:bg-slate-800 disabled:opacity-40"
-                    >
-                      Download ↓
-                    </button>
+                    {!document.isGitHub && (
+                      <button
+                        type="button"
+                        onClick={() => handleDownload(document)}
+                        disabled={busy}
+                        className="rounded-lg border border-slate-700 px-3 py-2 text-xs font-semibold text-slate-300 transition hover:bg-slate-800 disabled:opacity-40"
+                      >
+                        Download ↓
+                      </button>
+                    )}
                   </div>
                 </div>
               </div>
@@ -520,6 +597,7 @@ export default function DocumentUploader({ projectId }) {
               <p className="text-xs font-bold uppercase tracking-widest text-emerald-400">
                 Extraction Result
               </p>
+
               <h3 className="mt-2 text-lg font-bold text-white">
                 Extracted Document Text
               </h3>
@@ -550,21 +628,30 @@ export default function DocumentUploader({ projectId }) {
 
         <div className="mt-4 grid gap-4 text-sm sm:grid-cols-3">
           <div>
-            <p className="font-semibold text-white">01 · Upload</p>
+            <p className="font-semibold text-white">
+              01 · Upload or Import
+            </p>
+
             <p className="mt-1 text-xs leading-5 text-slate-500">
-              Add your source files securely.
+              Add source files or connect GitHub repositories.
             </p>
           </div>
 
           <div>
-            <p className="font-semibold text-white">02 · Extract & Analyze</p>
+            <p className="font-semibold text-white">
+              02 · Extract & Analyze
+            </p>
+
             <p className="mt-1 text-xs leading-5 text-slate-500">
-              Extract text and let AI identify claims.
+              Extract text and let AI identify important claims.
             </p>
           </div>
 
           <div>
-            <p className="font-semibold text-white">03 · Review</p>
+            <p className="font-semibold text-white">
+              03 · Review
+            </p>
+
             <p className="mt-1 text-xs leading-5 text-slate-500">
               Verify claims in your Knowledge Ledger.
             </p>
