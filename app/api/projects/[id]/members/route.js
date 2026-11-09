@@ -5,11 +5,10 @@ import { createAdminClient } from "@/lib/supabase/admin";
 
 const ALLOWED_ROLES = ["admin", "contributor", "viewer"];
 
-export async function POST(request, { params }) {
+
+export async function GET(request, { params }) {
   try {
     const { id: projectId } = await params;
-
-    // Verify authenticated user
     const supabase = await createClient();
 
     const {
@@ -24,7 +23,6 @@ export async function POST(request, { params }) {
       );
     }
 
-    // Verify project ownership
     const { data: project, error: projectError } = await supabase
       .from("projects")
       .select("id, owner_id")
@@ -38,9 +36,113 @@ export async function POST(request, { params }) {
       );
     }
 
-    if (project.owner_id !== user.id) {
+    let currentRole = "viewer";
+
+    if (project.owner_id === user.id) {
+      currentRole = "owner";
+    } else {
+      const { data: membership, error: membershipError } =
+        await supabase
+          .from("project_members")
+          .select("role")
+          .eq("project_id", projectId)
+          .eq("user_id", user.id)
+          .maybeSingle();
+
+      if (membershipError) throw membershipError;
+
+      if (!membership) {
+        return NextResponse.json(
+          { error: "You are not a member of this project." },
+          { status: 403 }
+        );
+      }
+
+      currentRole = membership.role;
+    }
+
+    // Use the admin client only after verifying membership.
+    const admin = createAdminClient();
+
+    const { data: members, error: membersError } = await admin
+      .from("project_members")
+      .select("user_id, role, joined_at")
+      .eq("project_id", projectId)
+      .order("joined_at", { ascending: true });
+
+    if (membersError) throw membersError;
+
+    return NextResponse.json({
+      members: members || [],
+      currentRole,
+    });
+  } catch (error) {
+    console.error("Member list error:", error);
+
+    return NextResponse.json(
+      { error: "Unable to load project members." },
+      { status: 500 }
+    );
+  }
+}
+
+
+export async function POST(request, { params }) {
+  try {
+    const { id: projectId } = await params;
+    const supabase = await createClient();
+
+    const {
+      data: { user },
+      error: authError,
+    } = await supabase.auth.getUser();
+
+    if (authError || !user) {
       return NextResponse.json(
-        { error: "Only the project owner can invite members." },
+        { error: "You must be logged in." },
+        { status: 401 }
+      );
+    }
+
+    // Verify that the project exists.
+    const { data: project, error: projectError } = await supabase
+      .from("projects")
+      .select("id, owner_id")
+      .eq("id", projectId)
+      .single();
+
+    if (projectError || !project) {
+      return NextResponse.json(
+        { error: "Project not found or access denied." },
+        { status: 404 }
+      );
+    }
+
+    // Determine the current user's project role.
+    let currentRole = "viewer";
+
+    if (project.owner_id === user.id) {
+      currentRole = "owner";
+    } else {
+      const { data: membership, error: membershipError } =
+        await supabase
+          .from("project_members")
+          .select("role")
+          .eq("project_id", projectId)
+          .eq("user_id", user.id)
+          .maybeSingle();
+
+      if (membershipError) {
+        throw membershipError;
+      }
+
+      currentRole = membership?.role || "viewer";
+    }
+
+    // Only owners and admins can invite members.
+    if (!["owner", "admin"].includes(currentRole)) {
+      return NextResponse.json(
+        { error: "Only project owners and admins can invite members." },
         { status: 403 }
       );
     }
@@ -64,9 +166,17 @@ export async function POST(request, { params }) {
       );
     }
 
+    // Prevent an admin from creating another admin.
+    if (currentRole === "admin" && role === "admin") {
+      return NextResponse.json(
+        { error: "Only the project owner can invite another admin." },
+        { status: 403 }
+      );
+    }
+
     const admin = createAdminClient();
 
-    // Check whether this email already belongs to a registered user.
+    // Find an existing registered account.
     let existingUser = null;
     let page = 1;
 
@@ -76,9 +186,7 @@ export async function POST(request, { params }) {
         perPage: 1000,
       });
 
-      if (error) {
-        throw error;
-      }
+      if (error) throw error;
 
       const users = data?.users || [];
 
@@ -86,9 +194,7 @@ export async function POST(request, { params }) {
         (item) => item.email?.toLowerCase() === email
       );
 
-      if (existingUser || users.length < 1000) {
-        break;
-      }
+      if (existingUser || users.length < 1000) break;
 
       page++;
     }
@@ -97,12 +203,10 @@ export async function POST(request, { params }) {
     let invitationMessage;
 
     if (existingUser) {
-      // Existing account: add directly to the project.
       memberUserId = existingUser.id;
-      invitationMessage = `${email} already has an account and has been added to your project.`;
-
+      invitationMessage =
+        `${email} already has an account and has been added to your project.`;
     } else {
-      // New account: send an invitation.
       const { data: invitation, error: inviteError } =
         await admin.auth.admin.inviteUserByEmail(email);
 
@@ -121,7 +225,7 @@ export async function POST(request, { params }) {
     }
 
     // Prevent duplicate membership.
-    const { data: existingMembership, error: membershipCheckError } =
+    const { data: existingMembership, error: checkError } =
       await admin
         .from("project_members")
         .select("user_id")
@@ -129,9 +233,7 @@ export async function POST(request, { params }) {
         .eq("user_id", memberUserId)
         .maybeSingle();
 
-    if (membershipCheckError) {
-      throw membershipCheckError;
-    }
+    if (checkError) throw checkError;
 
     if (existingMembership) {
       return NextResponse.json(
@@ -140,7 +242,7 @@ export async function POST(request, { params }) {
       );
     }
 
-    // Add membership
+    // Add the member using the server-only admin client.
     const { error: memberError } = await admin
       .from("project_members")
       .insert({
@@ -150,21 +252,20 @@ export async function POST(request, { params }) {
         added_by: user.id,
       });
 
-    if (memberError) {
-      throw memberError;
-    }
+    if (memberError) throw memberError;
 
     return NextResponse.json({
       success: true,
       message: invitationMessage,
       memberType: existingUser ? "existing" : "new",
     });
-
   } catch (error) {
     console.error("Member invitation error:", error);
 
     return NextResponse.json(
-      { error: "Unable to process invitation: " + error.message },
+      {
+        error: "Unable to process invitation: " + error.message,
+      },
       { status: 500 }
     );
   }
