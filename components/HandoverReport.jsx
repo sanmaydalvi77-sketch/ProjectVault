@@ -115,6 +115,52 @@ export default function HandoverReport({
     (relationship) => relationship.review_status === "pending"
   );
 
+  const conflictingClaims = unresolvedClaims.filter(
+  (claim) => claim.support_status === "conflicting"
+);
+
+const unverifiedClaims = unresolvedClaims.filter(
+  (claim) => claim.support_status === "unverified"
+);
+
+const confirmedDependencies = confirmedRelationships.filter(
+  (relationship) => relationship.relationship_type === "depends_on"
+);
+
+const smartNextActions = [];
+
+if (conflictingClaims.length > 0) {
+  smartNextActions.push({
+    priority: "High",
+    title: "Resolve conflicting project information",
+    description: `${conflictingClaims.length} approved claim(s) have conflicting evidence. Review the source documents and establish the correct information.`,
+  });
+}
+
+if (unverifiedClaims.length > 0) {
+  smartNextActions.push({
+    priority: "High",
+    title: "Verify outstanding evidence",
+    description: `${unverifiedClaims.length} approved claim(s) still have unverified evidence. Validate their supporting information before relying on them.`,
+  });
+}
+
+if (pendingRelationships.length > 0) {
+  smartNextActions.push({
+    priority: "Medium",
+    title: "Review pending knowledge relationships",
+    description: `${pendingRelationships.length} AI-detected relationship(s) are awaiting human review. Confirm or dismiss them in the Knowledge Ledger.`,
+  });
+}
+
+if (confirmedDependencies.length > 0) {
+  smartNextActions.push({
+    priority: "Medium",
+    title: "Review confirmed project dependencies",
+    description: `${confirmedDependencies.length} confirmed dependency relationship(s) exist. Understand these connections before modifying related project work.`,
+  });
+}
+
   function getClaimText(claimId) {
     return (
       claims.find((claim) => claim.id === claimId)?.claim_text ||
@@ -239,7 +285,22 @@ export default function HandoverReport({
       "PENDING RELATIONSHIPS"
     );
 
-    lines.push("5. REVIEW POLICY");
+    lines.push("5. SMART NEXT ACTIONS");
+lines.push("--------------------------------------------------");
+lines.push("");
+
+if (smartNextActions.length === 0) {
+  lines.push("No immediate actions identified from the available reviewed data.");
+  lines.push("");
+} else {
+  smartNextActions.forEach((action, index) => {
+    lines.push(`${index + 1}. [${action.priority}] ${action.title}`);
+    lines.push(action.description);
+    lines.push("");
+  });
+}
+
+lines.push("6. REVIEW POLICY");
     lines.push("--------------------------------------------------");
     lines.push(
       "Only human-approved claims are included in this report."
@@ -652,6 +713,74 @@ export default function HandoverReport({
           </div>
         )}
       </div>
+
+        {/* Smart Next Actions */}
+<div className="rounded-2xl border border-cyan-500/20 bg-slate-900/70 p-5 md:p-7">
+  <div className="flex flex-wrap items-center justify-between gap-3">
+    <div>
+      <p className="text-xs font-bold uppercase tracking-wider text-cyan-400">
+        Section 04
+      </p>
+
+      <h3 className="mt-2 text-xl font-bold text-white">
+        Smart Next Actions
+      </h3>
+
+      <p className="mt-2 text-sm text-slate-400">
+        Evidence-driven recommendations to help the next contributor
+        understand what needs attention.
+      </p>
+    </div>
+
+    <span className="rounded-full border border-cyan-500/20 bg-cyan-500/10 px-3 py-1 text-xs font-semibold text-cyan-300">
+      {smartNextActions.length} actions
+    </span>
+  </div>
+
+  {smartNextActions.length === 0 ? (
+    <div className="mt-5 rounded-xl border border-dashed border-slate-700 p-6 text-center">
+      <p className="text-sm font-semibold text-emerald-400">
+        No immediate actions identified
+      </p>
+      <p className="mt-2 text-xs text-slate-500">
+        No outstanding issues were detected in the available reviewed data.
+      </p>
+    </div>
+  ) : (
+    <div className="mt-5 space-y-3">
+      {smartNextActions.map((action, index) => (
+        <article
+          key={action.title}
+          className="rounded-xl border border-slate-800 bg-slate-950 p-4 md:p-5"
+        >
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <span className="text-xs font-semibold text-slate-500">
+              ACTION {String(index + 1).padStart(2, "0")}
+            </span>
+
+            <span
+              className={`rounded-full px-3 py-1 text-[10px] font-bold uppercase ${
+                action.priority === "High"
+                  ? "bg-red-500/10 text-red-400"
+                  : "bg-amber-500/10 text-amber-400"
+              }`}
+            >
+              {action.priority} priority
+            </span>
+          </div>
+
+          <h4 className="mt-3 text-sm font-bold text-white">
+            {action.title}
+          </h4>
+
+          <p className="mt-2 text-sm leading-6 text-slate-400">
+            {action.description}
+          </p>
+        </article>
+      ))}
+    </div>
+  )}
+</div>
 
       {/* Review Policy */}
       <div className="rounded-2xl border border-purple-500/20 bg-purple-500/[0.05] p-5 md:p-6">
