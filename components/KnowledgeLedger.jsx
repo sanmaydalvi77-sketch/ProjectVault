@@ -667,6 +667,82 @@ export default function KnowledgeLedger({ projectId }) {
                     )}
                   </div>
                 </div>
+                {/* Independent AI Evidence Verification */}
+<div className="mt-4 rounded-xl border border-purple-500/20 bg-purple-500/[0.04] p-4 md:p-5">
+  <div className="flex flex-wrap items-center justify-between gap-3">
+    <div>
+      <p className="text-[11px] font-bold uppercase tracking-[0.15em] text-purple-400">
+        Independent AI Evidence Verification
+      </p>
+
+      <p className="mt-1 text-xs text-slate-500">
+        AI assessment of whether the source quote supports this claim.
+      </p>
+    </div>
+
+    {(() => {
+      const verification =
+        claim.evidence_locator?.ai_evidence_check;
+
+      const verificationStyles = {
+        supports:
+          "border-emerald-500/20 bg-emerald-500/10 text-emerald-400",
+        does_not_support:
+          "border-red-500/20 bg-red-500/10 text-red-400",
+        uncertain:
+          "border-amber-500/20 bg-amber-500/10 text-amber-400",
+      };
+
+      return (
+        <span
+          className={`rounded-full border px-3 py-1 text-[11px] font-bold ${
+            verificationStyles[verification] ||
+            "border-slate-700 bg-slate-800 text-slate-400"
+          }`}
+        >
+          {verification
+            ? verification.replaceAll("_", " ")
+            : "Not assessed"}
+        </span>
+      );
+    })()}
+  </div>
+
+  <div className="mt-4 space-y-3">
+    <div className="flex items-center justify-between gap-3 text-xs">
+      <span className="text-slate-400">
+        Exact source quote match
+      </span>
+
+      <span
+        className={
+          claim.evidence_locator?.exact_quote_match === true
+            ? "font-semibold text-emerald-400"
+            : "font-semibold text-amber-400"
+        }
+      >
+        {claim.evidence_locator?.exact_quote_match === true
+          ? "✓ Verified"
+          : "Not verified"}
+      </span>
+    </div>
+
+    <div className="rounded-lg border border-slate-800 bg-slate-950 p-3">
+      <p className="text-[10px] font-bold uppercase tracking-wider text-slate-500">
+        AI verification explanation
+      </p>
+
+      <p className="mt-2 text-sm leading-6 text-slate-300">
+        {claim.evidence_locator?.ai_evidence_reason ||
+          "No independent AI evidence assessment is available for this claim."}
+      </p>
+    </div>
+  </div>
+
+  <p className="mt-3 text-[10px] leading-5 text-slate-500">
+    AI assessment is advisory and does not replace human verification.
+  </p>
+</div>
 
                 {claim.reviewer_notes && (
                   <div className="mt-4 rounded-xl border border-blue-500/15 bg-blue-500/[0.04] p-4">

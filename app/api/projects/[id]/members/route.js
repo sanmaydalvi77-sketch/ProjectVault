@@ -86,7 +86,6 @@ export async function GET(request, { params }) {
   }
 }
 
-
 export async function POST(request, { params }) {
   try {
     const { id: projectId } = await params;
