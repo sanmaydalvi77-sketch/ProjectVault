@@ -1,3 +1,4 @@
+
 import { NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 
@@ -26,16 +27,13 @@ async function getAuthenticatedClient() {
   } = await supabase.auth.getUser();
 
   if (error || !user) {
-    return {
-      supabase,
-      user: null,
-    };
+    return { supabase, user: null };
   }
 
   return { supabase, user };
 }
 
-// GET: Fetch tasks for a project
+// GET: Fetch project tasks with their linked knowledge claims.
 export async function GET(request) {
   try {
     const { supabase, user } = await getAuthenticatedClient();
@@ -59,19 +57,36 @@ export async function GET(request) {
 
     const { data, error } = await supabase
       .from("project_tasks")
-      .select("*")
+      .select(`
+        *,
+        linked_claim:knowledge_claims!project_tasks_linked_claim_id_fkey (
+          id,
+          claim_text,
+          claim_type,
+          evidence_quote,
+          evidence_locator,
+          support_status,
+          review_status
+        )
+      `)
       .eq("project_id", projectId)
       .order("created_at", { ascending: false });
 
     if (error) {
+      console.error("Task retrieval error:", error);
+
       return NextResponse.json(
         { error: error.message },
         { status: 400 }
       );
     }
 
-    return NextResponse.json({ tasks: data || [] });
+    return NextResponse.json({
+      tasks: data || [],
+    });
   } catch (error) {
+    console.error("Task GET error:", error);
+
     return NextResponse.json(
       { error: error.message || "Unable to fetch tasks." },
       { status: 500 }
@@ -79,7 +94,7 @@ export async function GET(request) {
   }
 }
 
-// POST: Create a task
+// POST: Create a task with an optional knowledge claim link.
 export async function POST(request) {
   try {
     const { supabase, user } = await getAuthenticatedClient();
@@ -102,33 +117,52 @@ export async function POST(request) {
       dueDate,
       status,
       blockedReason,
+      linkedClaimId,
     } = body;
 
-    if (!projectId || !title || !title.trim()) {
+    if (
+      !projectId ||
+      typeof title !== "string" ||
+      !title.trim()
+    ) {
       return NextResponse.json(
         { error: "Project ID and task title are required." },
         { status: 400 }
       );
     }
 
-    if (
-      status &&
-      !VALID_STATUSES.includes(status)
-    ) {
+    if (status && !VALID_STATUSES.includes(status)) {
       return NextResponse.json(
         { error: "Invalid task status." },
         { status: 400 }
       );
     }
 
-    if (
-      priority &&
-      !VALID_PRIORITIES.includes(priority)
-    ) {
+    if (priority && !VALID_PRIORITIES.includes(priority)) {
       return NextResponse.json(
         { error: "Invalid task priority." },
         { status: 400 }
       );
+    }
+
+    // Verify that the selected claim belongs to this project.
+    if (linkedClaimId) {
+      const { data: claim, error: claimError } = await supabase
+        .from("knowledge_claims")
+        .select("id")
+        .eq("id", linkedClaimId)
+        .eq("project_id", projectId)
+        .maybeSingle();
+
+      if (claimError || !claim) {
+        return NextResponse.json(
+          {
+            error:
+              "The linked knowledge claim was not found in this project.",
+          },
+          { status: 400 }
+        );
+      }
     }
 
     const { data, error } = await supabase
@@ -142,12 +176,15 @@ export async function POST(request) {
         assigned_to: assignedTo || null,
         due_date: dueDate || null,
         blocked_reason: blockedReason || null,
+        linked_claim_id: linkedClaimId || null,
         created_by: user.id,
       })
       .select()
       .single();
 
     if (error) {
+      console.error("Task creation error:", error);
+
       return NextResponse.json(
         { error: error.message },
         { status: 400 }
@@ -162,6 +199,8 @@ export async function POST(request) {
       { status: 201 }
     );
   } catch (error) {
+    console.error("Task POST error:", error);
+
     return NextResponse.json(
       { error: error.message || "Unable to create task." },
       { status: 500 }
@@ -169,7 +208,7 @@ export async function POST(request) {
   }
 }
 
-// PATCH: Update a task
+// PATCH: Update a task securely.
 export async function PATCH(request) {
   try {
     const { supabase, user } = await getAuthenticatedClient();
@@ -191,10 +230,27 @@ export async function PATCH(request) {
       );
     }
 
+    // 1. Fetch the existing task and its project.
+    const { data: existingTask, error: taskError } = await supabase
+      .from("project_tasks")
+      .select("id, project_id")
+      .eq("id", taskId)
+      .maybeSingle();
+
+    if (taskError || !existingTask) {
+      return NextResponse.json(
+        { error: "Task not found or inaccessible." },
+        { status: 404 }
+      );
+    }
+
     const updates = {};
 
     if (body.title !== undefined) {
-      if (!body.title.trim()) {
+      if (
+        typeof body.title !== "string" ||
+        !body.title.trim()
+      ) {
         return NextResponse.json(
           { error: "Task title cannot be empty." },
           { status: 400 }
@@ -246,6 +302,33 @@ export async function PATCH(request) {
       updates.blocked_reason = body.blockedReason || null;
     }
 
+    // 2. Validate the linked claim against the task's project.
+    if (body.linkedClaimId !== undefined) {
+      if (body.linkedClaimId) {
+        const { data: claim, error: claimError } = await supabase
+          .from("knowledge_claims")
+          .select("id")
+          .eq("id", body.linkedClaimId)
+          .eq("project_id", existingTask.project_id)
+          .maybeSingle();
+
+        if (claimError || !claim) {
+          return NextResponse.json(
+            {
+              error:
+                "The linked knowledge claim does not belong to this task's project.",
+            },
+            { status: 400 }
+          );
+        }
+
+        updates.linked_claim_id = body.linkedClaimId;
+      } else {
+        // Allow removing an existing knowledge claim link.
+        updates.linked_claim_id = null;
+      }
+    }
+
     if (Object.keys(updates).length === 0) {
       return NextResponse.json(
         { error: "No task updates were provided." },
@@ -255,14 +338,18 @@ export async function PATCH(request) {
 
     updates.updated_at = new Date().toISOString();
 
+    // 3. Update only the verified task.
     const { data, error } = await supabase
       .from("project_tasks")
       .update(updates)
       .eq("id", taskId)
+      .eq("project_id", existingTask.project_id)
       .select()
       .single();
 
     if (error) {
+      console.error("Task update error:", error);
+
       return NextResponse.json(
         { error: error.message },
         { status: 400 }
@@ -274,6 +361,8 @@ export async function PATCH(request) {
       task: data,
     });
   } catch (error) {
+    console.error("Task PATCH error:", error);
+
     return NextResponse.json(
       { error: error.message || "Unable to update task." },
       { status: 500 }
@@ -281,7 +370,7 @@ export async function PATCH(request) {
   }
 }
 
-// DELETE: Delete a task
+// DELETE: Delete a task.
 export async function DELETE(request) {
   try {
     const { supabase, user } = await getAuthenticatedClient();
@@ -309,6 +398,8 @@ export async function DELETE(request) {
       .eq("id", taskId);
 
     if (error) {
+      console.error("Task deletion error:", error);
+
       return NextResponse.json(
         { error: error.message },
         { status: 400 }
@@ -319,6 +410,8 @@ export async function DELETE(request) {
       message: "Task deleted successfully.",
     });
   } catch (error) {
+    console.error("Task DELETE error:", error);
+
     return NextResponse.json(
       { error: error.message || "Unable to delete task." },
       { status: 500 }

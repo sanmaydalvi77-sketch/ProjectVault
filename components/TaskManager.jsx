@@ -18,9 +18,16 @@ const PRIORITIES = [
   { value: "urgent", label: "Urgent" },
 ];
 
+const SELECT_CLASS =
+  "w-full rounded-xl border border-white/10 bg-[#171923] px-4 py-3 text-white";
+
+const INPUT_CLASS =
+  "w-full rounded-xl border border-white/10 bg-black/20 px-4 py-3 text-white outline-none focus:border-indigo-400";
+
 export default function TaskManager({ projectId }) {
   const [tasks, setTasks] = useState([]);
   const [members, setMembers] = useState([]);
+  const [claims, setClaims] = useState([]);
   const [currentUserId, setCurrentUserId] = useState("");
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -36,6 +43,7 @@ export default function TaskManager({ projectId }) {
     dueDate: "",
     status: "todo",
     blockedReason: "",
+    linkedClaimId: "",
   });
 
   async function loadData() {
@@ -44,32 +52,50 @@ export default function TaskManager({ projectId }) {
 
     try {
       const supabase = createClient();
+
       const {
-  data: { user },
-} = await supabase.auth.getUser();
+        data: { user },
+      } = await supabase.auth.getUser();
 
-setCurrentUserId(user?.id || "");
+      setCurrentUserId(user?.id || "");
 
-      const [taskResponse, memberResponse] = await Promise.all([
-        fetch(`/api/tasks?projectId=${projectId}`),
-        supabase
-          .from("project_members")
-          .select("user_id, role")
-          .eq("project_id", projectId),
-      ]);
+      const [taskResponse, memberResponse, claimResponse] =
+        await Promise.all([
+          fetch(`/api/tasks?projectId=${projectId}`),
+
+          supabase
+            .from("project_members")
+            .select("user_id, role")
+            .eq("project_id", projectId),
+
+          supabase
+            .from("knowledge_claims")
+            .select(
+              "id, claim_text, claim_type, evidence_quote, support_status, review_status"
+            )
+            .eq("project_id", projectId)
+            .order("created_at", { ascending: false }),
+        ]);
 
       const taskResult = await taskResponse.json();
 
       if (!taskResponse.ok) {
-        throw new Error(taskResult.error || "Unable to load tasks.");
+        throw new Error(
+          taskResult.error || "Unable to load tasks."
+        );
       }
 
       if (memberResponse.error) {
         throw new Error(memberResponse.error.message);
       }
 
+      if (claimResponse.error) {
+        throw new Error(claimResponse.error.message);
+      }
+
       setTasks(taskResult.tasks || []);
       setMembers(memberResponse.data || []);
+      setClaims(claimResponse.data || []);
     } catch (err) {
       setError(err.message || "Something went wrong.");
     } finally {
@@ -119,7 +145,9 @@ setCurrentUserId(user?.id || "");
       const result = await response.json();
 
       if (!response.ok) {
-        throw new Error(result.error || "Unable to create task.");
+        throw new Error(
+          result.error || "Unable to create task."
+        );
       }
 
       setForm({
@@ -130,6 +158,7 @@ setCurrentUserId(user?.id || "");
         dueDate: "",
         status: "todo",
         blockedReason: "",
+        linkedClaimId: "",
       });
 
       setSuccess("Task created successfully.");
@@ -160,7 +189,9 @@ setCurrentUserId(user?.id || "");
       const result = await response.json();
 
       if (!response.ok) {
-        throw new Error(result.error || "Unable to update task.");
+        throw new Error(
+          result.error || "Unable to update task."
+        );
       }
 
       setTasks((previous) =>
@@ -195,7 +226,9 @@ setCurrentUserId(user?.id || "");
       const result = await response.json();
 
       if (!response.ok) {
-        throw new Error(result.error || "Unable to delete task.");
+        throw new Error(
+          result.error || "Unable to delete task."
+        );
       }
 
       setTasks((previous) =>
@@ -208,19 +241,19 @@ setCurrentUserId(user?.id || "");
     }
   }
 
-const currentMember = members.find(
-  (member) => member.user_id === currentUserId
-);
+  const currentMember = members.find(
+    (member) => member.user_id === currentUserId
+  );
 
-const canDeleteTasks = ["owner", "admin"].includes(
-  currentMember?.role
-);
+  const canDeleteTasks = ["owner", "admin"].includes(
+    currentMember?.role
+  );
 
-const canManageTasks = [
-  "owner",
-  "admin",
-  "contributor",
-].includes(currentMember?.role);
+  const canManageTasks = [
+    "owner",
+    "admin",
+    "contributor",
+  ].includes(currentMember?.role);
 
   const filteredTasks =
     filter === "all"
@@ -233,7 +266,9 @@ const canManageTasks = [
     in_progress: tasks.filter(
       (task) => task.status === "in_progress"
     ).length,
-    blocked: tasks.filter((task) => task.status === "blocked").length,
+    blocked: tasks.filter(
+      (task) => task.status === "blocked"
+    ).length,
     completed: tasks.filter(
       (task) => task.status === "completed"
     ).length,
@@ -247,6 +282,23 @@ const canManageTasks = [
     if (!member) return "Unknown member";
 
     return `${member.role} · ${userId.slice(0, 8)}`;
+  }
+
+  function getTaskClaim(task) {
+    return (
+      task.linked_claim ||
+      claims.find(
+        (claim) => claim.id === task.linked_claim_id
+      ) ||
+      null
+    );
+  }
+
+  function getStatusLabel(status) {
+    return (
+      STATUSES.find((item) => item.value === status)?.label ||
+      status
+    );
   }
 
   if (loading) {
@@ -270,7 +322,8 @@ const canManageTasks = [
         </h2>
 
         <p className="mt-2 text-sm text-gray-400">
-          Track responsibilities, deadlines and blockers in one place.
+          Track responsibilities, deadlines, blockers and
+          evidence-backed tasks in one place.
         </p>
       </div>
 
@@ -306,7 +359,10 @@ const canManageTasks = [
                 : "border-white/10 bg-white/5 hover:bg-white/10"
             }`}
           >
-            <p className="text-xs text-gray-400">{item.label}</p>
+            <p className="text-xs text-gray-400">
+              {item.label}
+            </p>
+
             <p className="mt-2 text-2xl font-bold text-white">
               {counts[item.key]}
             </p>
@@ -314,151 +370,203 @@ const canManageTasks = [
         ))}
       </div>
 
-{canManageTasks && (
-  <>
       {/* Create task form */}
-      <div className="rounded-2xl border border-white/10 bg-white/5 p-5 md:p-6">
-        <h3 className="text-lg font-semibold text-white">
-          Create a new task
-        </h3>
+      {canManageTasks && (
+        <div className="rounded-2xl border border-white/10 bg-white/5 p-5 md:p-6">
+          <h3 className="text-lg font-semibold text-white">
+            Create a new task
+          </h3>
 
-        <form onSubmit={createTask} className="mt-5 space-y-4">
-          <div>
-            <label className="mb-2 block text-sm text-gray-300">
-              Task title *
-            </label>
+          <p className="mt-1 text-sm text-gray-400">
+            Connect tasks to verified project knowledge for
+            better continuity.
+          </p>
 
-            <input
-              name="title"
-              value={form.title}
-              onChange={handleChange}
-              placeholder="Example: Complete authentication module"
-              required
-              className="w-full rounded-xl border border-white/10 bg-black/20 px-4 py-3 text-white outline-none focus:border-indigo-400"
-            />
-          </div>
-
-          <div>
-            <label className="mb-2 block text-sm text-gray-300">
-              Description
-            </label>
-
-            <textarea
-              name="description"
-              value={form.description}
-              onChange={handleChange}
-              rows={3}
-              placeholder="Describe what needs to be completed..."
-              className="w-full rounded-xl border border-white/10 bg-black/20 px-4 py-3 text-white outline-none focus:border-indigo-400"
-            />
-          </div>
-
-          <div className="grid gap-4 md:grid-cols-2">
+          <form
+            onSubmit={createTask}
+            className="mt-5 space-y-4"
+          >
             <div>
               <label className="mb-2 block text-sm text-gray-300">
-                Priority
-              </label>
-
-              <select
-                name="priority"
-                value={form.priority}
-                onChange={handleChange}
-                className="w-full rounded-xl border border-white/10 bg-[#171923] px-4 py-3 text-white"
-              >
-                {PRIORITIES.map((item) => (
-                  <option key={item.value} value={item.value}>
-                    {item.label}
-                  </option>
-                ))}
-              </select>
-            </div>
-
-            <div>
-              <label className="mb-2 block text-sm text-gray-300">
-                Initial status
-              </label>
-
-              <select
-                name="status"
-                value={form.status}
-                onChange={handleChange}
-                className="w-full rounded-xl border border-white/10 bg-[#171923] px-4 py-3 text-white"
-              >
-                {STATUSES.map((item) => (
-                  <option key={item.value} value={item.value}>
-                    {item.label}
-                  </option>
-                ))}
-              </select>
-            </div>
-
-            <div>
-              <label className="mb-2 block text-sm text-gray-300">
-                Assign to
-              </label>
-
-              <select
-                name="assignedTo"
-                value={form.assignedTo}
-                onChange={handleChange}
-                className="w-full rounded-xl border border-white/10 bg-[#171923] px-4 py-3 text-white"
-              >
-                <option value="">Unassigned</option>
-
-                {members.map((member) => (
-                  <option
-                    key={member.user_id}
-                    value={member.user_id}
-                  >
-                    {member.role} · {member.user_id.slice(0, 8)}
-                  </option>
-                ))}
-              </select>
-            </div>
-
-            <div>
-              <label className="mb-2 block text-sm text-gray-300">
-                Due date
+                Task title *
               </label>
 
               <input
-                type="date"
-                name="dueDate"
-                value={form.dueDate}
+                name="title"
+                value={form.title}
                 onChange={handleChange}
-                className="w-full rounded-xl border border-white/10 bg-black/20 px-4 py-3 text-white"
+                placeholder="Example: Complete authentication module"
+                required
+                className={INPUT_CLASS}
               />
             </div>
-          </div>
 
-          {form.status === "blocked" && (
             <div>
               <label className="mb-2 block text-sm text-gray-300">
-                Why is this task blocked?
+                Description
               </label>
 
               <textarea
-                name="blockedReason"
-                value={form.blockedReason}
+                name="description"
+                value={form.description}
                 onChange={handleChange}
-                rows={2}
-                placeholder="Explain the blocker..."
-                className="w-full rounded-xl border border-white/10 bg-black/20 px-4 py-3 text-white"
+                rows={3}
+                placeholder="Describe what needs to be completed..."
+                className={INPUT_CLASS}
               />
             </div>
-          )}
 
-          <button
-            type="submit"
-            disabled={saving}
-            className="rounded-xl bg-indigo-500 px-6 py-3 font-semibold text-white transition hover:bg-indigo-400 disabled:cursor-not-allowed disabled:opacity-50"
-          >
-            {saving ? "Creating..." : "+ Create Task"}
-          </button>
-        </form>
-      </div>
-       </>
-)}
+            {/* Knowledge claim selector */}
+            <div>
+              <label className="mb-2 block text-sm text-gray-300">
+                Link Knowledge Claim
+              </label>
+
+              <select
+                name="linkedClaimId"
+                value={form.linkedClaimId}
+                onChange={handleChange}
+                className={SELECT_CLASS}
+              >
+                <option value="">
+                  No linked claim
+                </option>
+
+                {claims.map((claim) => (
+                  <option key={claim.id} value={claim.id}>
+                    {claim.claim_text.slice(0, 100)}
+                    {claim.claim_text.length > 100
+                      ? "..."
+                      : ""}
+                  </option>
+                ))}
+              </select>
+
+              <p className="mt-2 text-xs text-gray-500">
+                Link this task to an existing Knowledge Ledger
+                claim that explains why the work is needed.
+              </p>
+
+              {claims.length === 0 && (
+                <p className="mt-2 text-xs text-amber-300">
+                  No Knowledge Ledger claims found for this
+                  project yet.
+                </p>
+              )}
+            </div>
+
+            <div className="grid gap-4 md:grid-cols-2">
+              <div>
+                <label className="mb-2 block text-sm text-gray-300">
+                  Priority
+                </label>
+
+                <select
+                  name="priority"
+                  value={form.priority}
+                  onChange={handleChange}
+                  className={SELECT_CLASS}
+                >
+                  {PRIORITIES.map((item) => (
+                    <option
+                      key={item.value}
+                      value={item.value}
+                    >
+                      {item.label}
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              <div>
+                <label className="mb-2 block text-sm text-gray-300">
+                  Initial status
+                </label>
+
+                <select
+                  name="status"
+                  value={form.status}
+                  onChange={handleChange}
+                  className={SELECT_CLASS}
+                >
+                  {STATUSES.map((item) => (
+                    <option
+                      key={item.value}
+                      value={item.value}
+                    >
+                      {item.label}
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              <div>
+                <label className="mb-2 block text-sm text-gray-300">
+                  Assign to
+                </label>
+
+                <select
+                  name="assignedTo"
+                  value={form.assignedTo}
+                  onChange={handleChange}
+                  className={SELECT_CLASS}
+                >
+                  <option value="">Unassigned</option>
+
+                  {members.map((member) => (
+                    <option
+                      key={member.user_id}
+                      value={member.user_id}
+                    >
+                      {member.role} ·{" "}
+                      {member.user_id.slice(0, 8)}
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              <div>
+                <label className="mb-2 block text-sm text-gray-300">
+                  Due date
+                </label>
+
+                <input
+                  type="date"
+                  name="dueDate"
+                  value={form.dueDate}
+                  onChange={handleChange}
+                  className={INPUT_CLASS}
+                />
+              </div>
+            </div>
+
+            {form.status === "blocked" && (
+              <div>
+                <label className="mb-2 block text-sm text-gray-300">
+                  Why is this task blocked?
+                </label>
+
+                <textarea
+                  name="blockedReason"
+                  value={form.blockedReason}
+                  onChange={handleChange}
+                  rows={2}
+                  placeholder="Explain the blocker..."
+                  className={INPUT_CLASS}
+                />
+              </div>
+            )}
+
+            <button
+              type="submit"
+              disabled={saving}
+              className="rounded-xl bg-indigo-500 px-6 py-3 font-semibold text-white transition hover:bg-indigo-400 disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              {saving ? "Creating..." : "+ Create Task"}
+            </button>
+          </form>
+        </div>
+      )}
 
       {/* Task list */}
       <div>
@@ -474,138 +582,228 @@ const canManageTasks = [
 
         {filteredTasks.length === 0 ? (
           <div className="rounded-2xl border border-dashed border-white/20 p-10 text-center">
-            <p className="text-gray-300">No tasks found.</p>
+            <p className="text-gray-300">
+              No tasks found.
+            </p>
+
             <p className="mt-2 text-sm text-gray-500">
               Create a task to start tracking project work.
             </p>
           </div>
         ) : (
           <div className="space-y-4">
-            {filteredTasks.map((task) => (
-              <div
-                key={task.id}
-                className="rounded-2xl border border-white/10 bg-white/5 p-5"
-              >
-                <div className="flex flex-col justify-between gap-4 md:flex-row">
-                  <div className="min-w-0 flex-1">
-                    <h4 className="font-semibold text-white">
-                      {task.title}
-                    </h4>
+            {filteredTasks.map((task) => {
+              const linkedClaim = getTaskClaim(task);
 
-                    {task.description && (
-                      <p className="mt-2 text-sm leading-6 text-gray-400">
-                        {task.description}
-                      </p>
-                    )}
+              return (
+                <div
+                  key={task.id}
+                  className="rounded-2xl border border-white/10 bg-white/5 p-5"
+                >
+                  <div className="flex flex-col justify-between gap-4 md:flex-row">
+                    <div className="min-w-0 flex-1">
+                      <h4 className="font-semibold text-white">
+                        {task.title}
+                      </h4>
 
-                    <div className="mt-4 flex flex-wrap gap-2">
-                      <span className="rounded-full bg-white/10 px-3 py-1 text-xs text-gray-300">
-                        {task.priority.toUpperCase()}
-                      </span>
+                      {task.description && (
+                        <p className="mt-2 text-sm leading-6 text-gray-400">
+                          {task.description}
+                        </p>
+                      )}
 
-                      {task.due_date && (
+                      <div className="mt-4 flex flex-wrap gap-2">
                         <span className="rounded-full bg-white/10 px-3 py-1 text-xs text-gray-300">
-                          Due: {task.due_date}
+                          {task.priority.toUpperCase()}
                         </span>
+
+                        <span className="rounded-full bg-indigo-500/10 px-3 py-1 text-xs text-indigo-300">
+                          {getStatusLabel(task.status)}
+                        </span>
+
+                        {task.due_date && (
+                          <span className="rounded-full bg-white/10 px-3 py-1 text-xs text-gray-300">
+                            Due: {task.due_date}
+                          </span>
+                        )}
+                      </div>
+
+                      <p className="mt-3 text-xs text-gray-500">
+                        Assigned to:{" "}
+                        {task.assigned_to
+                          ? getMemberLabel(task.assigned_to)
+                          : "Unassigned"}
+                      </p>
+
+                      {/* Linked knowledge evidence */}
+                      {linkedClaim && (
+                        <div className="mt-4 rounded-xl border border-indigo-400/20 bg-indigo-500/10 p-4">
+                          <p className="text-xs font-semibold uppercase tracking-wider text-indigo-300">
+                            Linked Knowledge Evidence
+                          </p>
+
+                          <p className="mt-2 text-sm font-medium text-white">
+                            {linkedClaim.claim_text}
+                          </p>
+
+                          {linkedClaim.evidence_quote && (
+                            <blockquote className="mt-3 border-l-2 border-indigo-400/50 pl-3 text-sm italic text-gray-300">
+                              "{linkedClaim.evidence_quote}"
+                            </blockquote>
+                          )}
+
+                          <div className="mt-3 flex flex-wrap gap-2">
+                            {linkedClaim.support_status && (
+                              <span className="rounded-full bg-white/10 px-2 py-1 text-xs text-gray-300">
+                                Evidence:{" "}
+                                {linkedClaim.support_status}
+                              </span>
+                            )}
+
+                            {linkedClaim.review_status && (
+                              <span className="rounded-full bg-white/10 px-2 py-1 text-xs text-gray-300">
+                                Review:{" "}
+                                {linkedClaim.review_status}
+                              </span>
+                            )}
+                          </div>
+                        </div>
+                      )}
+
+                      {task.status === "blocked" && (
+                        <div className="mt-3 rounded-lg border border-red-500/20 bg-red-500/10 p-3">
+                          <p className="text-xs font-semibold text-red-300">
+                            BLOCKER
+                          </p>
+
+                          <p className="mt-1 text-sm text-red-200">
+                            {task.blocked_reason ||
+                              "No blocker explanation provided."}
+                          </p>
+                        </div>
                       )}
                     </div>
 
-                    <p className="mt-3 text-xs text-gray-500">
-                      Assigned to:{" "}
-                      {task.assigned_to
-                        ? getMemberLabel(task.assigned_to)
-                        : "Unassigned"}
-                    </p>
+                    <div className="flex min-w-[170px] flex-col gap-3">
+                      {canManageTasks && (
+                        <>
+                          <select
+                            value={task.status}
+                            onChange={(event) => {
+                              const newStatus =
+                                event.target.value;
 
-                    {task.status === "blocked" && (
-                      <div className="mt-3 rounded-lg border border-red-500/20 bg-red-500/10 p-3">
-                        <p className="text-xs font-semibold text-red-300">
-                          BLOCKER
-                        </p>
-                        <p className="mt-1 text-sm text-red-200">
-                          {task.blocked_reason ||
-                            "No blocker explanation provided."}
-                        </p>
-                      </div>
-                    )}
-                  </div>
+                              updateTask(task.id, {
+                                status: newStatus,
+                                ...(newStatus === "blocked"
+                                  ? {}
+                                  : { blockedReason: null }),
+                              });
+                            }}
+                            className="w-full rounded-lg border border-white/10 bg-[#171923] px-3 py-2 text-sm text-white"
+                          >
+                            {STATUSES.map((item) => (
+                              <option
+                                key={item.value}
+                                value={item.value}
+                              >
+                                {item.label}
+                              </option>
+                            ))}
+                          </select>
 
-                  <div className="flex min-w-[170px] flex-col gap-3">
-                    {canManageTasks && (
-  <>
-                    <select
-                      value={task.status}
-                      onChange={(event) => {
-                        const newStatus = event.target.value;
+                          <select
+                            value={task.priority}
+                            onChange={(event) =>
+                              updateTask(task.id, {
+                                priority: event.target.value,
+                              })
+                            }
+                            className="w-full rounded-lg border border-white/10 bg-[#171923] px-3 py-2 text-sm text-white"
+                          >
+                            {PRIORITIES.map((item) => (
+                              <option
+                                key={item.value}
+                                value={item.value}
+                              >
+                                {item.label} priority
+                              </option>
+                            ))}
+                          </select>
 
-                        updateTask(task.id, {
-                          status: newStatus,
-                          ...(newStatus === "blocked"
-                            ? {}
-                            : { blockedReason: null }),
-                        });
-                      }}
-                      className="w-full rounded-lg border border-white/10 bg-[#171923] px-3 py-2 text-sm text-white"
-                    >
-                      {STATUSES.map((item) => (
-                        <option key={item.value} value={item.value}>
-                          {item.label}
-                        </option>
-                      ))}
-                    </select>
+                          <select
+                            value={task.assigned_to || ""}
+                            onChange={(event) =>
+                              updateTask(task.id, {
+                                assignedTo:
+                                  event.target.value || null,
+                              })
+                            }
+                            className="w-full rounded-lg border border-white/10 bg-[#171923] px-3 py-2 text-sm text-white"
+                          >
+                            <option value="">Unassigned</option>
 
-                    <select
-                      value={task.priority}
-                      onChange={(event) =>
-                        updateTask(task.id, {
-                          priority: event.target.value,
-                        })
-                      }
-                      className="w-full rounded-lg border border-white/10 bg-[#171923] px-3 py-2 text-sm text-white"
-                    >
-                      {PRIORITIES.map((item) => (
-                        <option key={item.value} value={item.value}>
-                          {item.label} priority
-                        </option>
-                      ))}
-                    </select>
+                            {members.map((member) => (
+                              <option
+                                key={member.user_id}
+                                value={member.user_id}
+                              >
+                                {member.role} ·{" "}
+                                {member.user_id.slice(0, 8)}
+                              </option>
+                            ))}
+                          </select>
 
-                    <select
-                      value={task.assigned_to || ""}
-                      onChange={(event) =>
-                        updateTask(task.id, {
-                          assignedTo: event.target.value || null,
-                        })
-                      }
-                      className="w-full rounded-lg border border-white/10 bg-[#171923] px-3 py-2 text-sm text-white"
-                    >
-                      <option value="">Unassigned</option>
+                          {/* Change linked claim */}
+                          <div>
+                            <label className="mb-2 block text-xs text-gray-400">
+                              Linked Knowledge Claim
+                            </label>
 
-                      {members.map((member) => (
-                        <option
-                          key={member.user_id}
-                          value={member.user_id}
+                            <select
+                              value={task.linked_claim_id || ""}
+                              onChange={(event) =>
+                                updateTask(task.id, {
+                                  linkedClaimId:
+                                    event.target.value || null,
+                                })
+                              }
+                              className="w-full rounded-lg border border-white/10 bg-[#171923] px-3 py-2 text-sm text-white"
+                            >
+                              <option value="">
+                                No linked claim
+                              </option>
+
+                              {claims.map((claim) => (
+                                <option
+                                  key={claim.id}
+                                  value={claim.id}
+                                >
+                                  {claim.claim_text.slice(0, 65)}
+                                  {claim.claim_text.length > 65
+                                    ? "..."
+                                    : ""}
+                                </option>
+                              ))}
+                            </select>
+                          </div>
+                        </>
+                      )}
+
+                      {canDeleteTasks && (
+                        <button
+                          type="button"
+                          onClick={() => deleteTask(task.id)}
+                          className="rounded-lg border border-red-500/20 px-3 py-2 text-sm text-red-300 transition hover:bg-red-500/10"
                         >
-                          {member.role} · {member.user_id.slice(0, 8)}
-                        </option>
-                      ))}
-                    </select>
-                    </>
-)}
-
-                    {canDeleteTasks && (
-  <button
-    type="button"
-    onClick={() => deleteTask(task.id)}
-    className="rounded-lg border border-red-500/20 px-3 py-2 text-sm text-red-300 transition hover:bg-red-500/10"
-  >
-    Delete task
-  </button>
-)}
+                          Delete task
+                        </button>
+                      )}
+                    </div>
                   </div>
                 </div>
-              </div>
-            ))}
+              );
+            })}
           </div>
         )}
       </div>
