@@ -18,6 +18,10 @@ const VALID_PRIORITIES = [
   "urgent",
 ];
 
+const TASK_WRITE_ROLES = ["owner", "admin", "contributor"];
+const TASK_DELETE_ROLES = ["owner", "admin"];
+
+// Authenticate the current user.
 async function getAuthenticatedClient() {
   const supabase = await createClient();
 
@@ -33,7 +37,43 @@ async function getAuthenticatedClient() {
   return { supabase, user };
 }
 
-// GET: Fetch project tasks with their linked knowledge claims.
+// Check the user's actual role in a project.
+async function getProjectRole(supabase, projectId, userId) {
+  const { data: project, error: projectError } = await supabase
+    .from("projects")
+    .select("owner_id")
+    .eq("id", projectId)
+    .maybeSingle();
+
+  if (projectError) {
+    console.error("Project access lookup error:", projectError);
+    return null;
+  }
+
+  if (!project) {
+    return null;
+  }
+
+  if (project.owner_id === userId) {
+    return "owner";
+  }
+
+  const { data: membership, error: membershipError } = await supabase
+    .from("project_members")
+    .select("role")
+    .eq("project_id", projectId)
+    .eq("user_id", userId)
+    .maybeSingle();
+
+  if (membershipError) {
+    console.error("Membership lookup error:", membershipError);
+    return null;
+  }
+
+  return membership?.role || null;
+}
+
+// GET: Fetch tasks for any authorised project member.
 export async function GET(request) {
   try {
     const { supabase, user } = await getAuthenticatedClient();
@@ -52,6 +92,15 @@ export async function GET(request) {
       return NextResponse.json(
         { error: "Project ID is required." },
         { status: 400 }
+      );
+    }
+
+    const role = await getProjectRole(supabase, projectId, user.id);
+
+    if (!role) {
+      return NextResponse.json(
+        { error: "You do not have access to this project." },
+        { status: 403 }
       );
     }
 
@@ -76,8 +125,8 @@ export async function GET(request) {
       console.error("Task retrieval error:", error);
 
       return NextResponse.json(
-        { error: error.message },
-        { status: 400 }
+        { error: "Unable to retrieve project tasks." },
+        { status: 500 }
       );
     }
 
@@ -88,13 +137,13 @@ export async function GET(request) {
     console.error("Task GET error:", error);
 
     return NextResponse.json(
-      { error: error.message || "Unable to fetch tasks." },
+      { error: "Unable to fetch tasks." },
       { status: 500 }
     );
   }
 }
 
-// POST: Create a task with an optional knowledge claim link.
+// POST: Owner, Admin and Contributor can create tasks.
 export async function POST(request) {
   try {
     const { supabase, user } = await getAuthenticatedClient();
@@ -131,6 +180,15 @@ export async function POST(request) {
       );
     }
 
+    const role = await getProjectRole(supabase, projectId, user.id);
+
+    if (!TASK_WRITE_ROLES.includes(role)) {
+      return NextResponse.json(
+        { error: "You do not have permission to create tasks." },
+        { status: 403 }
+      );
+    }
+
     if (status && !VALID_STATUSES.includes(status)) {
       return NextResponse.json(
         { error: "Invalid task status." },
@@ -145,7 +203,6 @@ export async function POST(request) {
       );
     }
 
-    // Verify that the selected claim belongs to this project.
     if (linkedClaimId) {
       const { data: claim, error: claimError } = await supabase
         .from("knowledge_claims")
@@ -156,10 +213,7 @@ export async function POST(request) {
 
       if (claimError || !claim) {
         return NextResponse.json(
-          {
-            error:
-              "The linked knowledge claim was not found in this project.",
-          },
+          { error: "The linked claim does not belong to this project." },
           { status: 400 }
         );
       }
@@ -186,8 +240,8 @@ export async function POST(request) {
       console.error("Task creation error:", error);
 
       return NextResponse.json(
-        { error: error.message },
-        { status: 400 }
+        { error: "Unable to create task." },
+        { status: 500 }
       );
     }
 
@@ -202,13 +256,13 @@ export async function POST(request) {
     console.error("Task POST error:", error);
 
     return NextResponse.json(
-      { error: error.message || "Unable to create task." },
+      { error: "Unable to create task." },
       { status: 500 }
     );
   }
 }
 
-// PATCH: Update a task securely.
+// PATCH: Owner, Admin and Contributor can update tasks.
 export async function PATCH(request) {
   try {
     const { supabase, user } = await getAuthenticatedClient();
@@ -230,7 +284,6 @@ export async function PATCH(request) {
       );
     }
 
-    // 1. Fetch the existing task and its project.
     const { data: existingTask, error: taskError } = await supabase
       .from("project_tasks")
       .select("id, project_id")
@@ -241,6 +294,19 @@ export async function PATCH(request) {
       return NextResponse.json(
         { error: "Task not found or inaccessible." },
         { status: 404 }
+      );
+    }
+
+    const role = await getProjectRole(
+      supabase,
+      existingTask.project_id,
+      user.id
+    );
+
+    if (!TASK_WRITE_ROLES.includes(role)) {
+      return NextResponse.json(
+        { error: "You do not have permission to update tasks." },
+        { status: 403 }
       );
     }
 
@@ -302,7 +368,6 @@ export async function PATCH(request) {
       updates.blocked_reason = body.blockedReason || null;
     }
 
-    // 2. Validate the linked claim against the task's project.
     if (body.linkedClaimId !== undefined) {
       if (body.linkedClaimId) {
         const { data: claim, error: claimError } = await supabase
@@ -315,8 +380,7 @@ export async function PATCH(request) {
         if (claimError || !claim) {
           return NextResponse.json(
             {
-              error:
-                "The linked knowledge claim does not belong to this task's project.",
+              error: "The linked claim does not belong to this project.",
             },
             { status: 400 }
           );
@@ -324,7 +388,6 @@ export async function PATCH(request) {
 
         updates.linked_claim_id = body.linkedClaimId;
       } else {
-        // Allow removing an existing knowledge claim link.
         updates.linked_claim_id = null;
       }
     }
@@ -338,7 +401,6 @@ export async function PATCH(request) {
 
     updates.updated_at = new Date().toISOString();
 
-    // 3. Update only the verified task.
     const { data, error } = await supabase
       .from("project_tasks")
       .update(updates)
@@ -351,8 +413,8 @@ export async function PATCH(request) {
       console.error("Task update error:", error);
 
       return NextResponse.json(
-        { error: error.message },
-        { status: 400 }
+        { error: "Unable to update task." },
+        { status: 500 }
       );
     }
 
@@ -364,13 +426,13 @@ export async function PATCH(request) {
     console.error("Task PATCH error:", error);
 
     return NextResponse.json(
-      { error: error.message || "Unable to update task." },
+      { error: "Unable to update task." },
       { status: 500 }
     );
   }
 }
 
-// DELETE: Delete a task.
+// DELETE: Only Owner and Admin can delete tasks.
 export async function DELETE(request) {
   try {
     const { supabase, user } = await getAuthenticatedClient();
@@ -392,17 +454,44 @@ export async function DELETE(request) {
       );
     }
 
+    const { data: existingTask, error: taskError } = await supabase
+      .from("project_tasks")
+      .select("id, project_id")
+      .eq("id", taskId)
+      .maybeSingle();
+
+    if (taskError || !existingTask) {
+      return NextResponse.json(
+        { error: "Task not found or inaccessible." },
+        { status: 404 }
+      );
+    }
+
+    const role = await getProjectRole(
+      supabase,
+      existingTask.project_id,
+      user.id
+    );
+
+    if (!TASK_DELETE_ROLES.includes(role)) {
+      return NextResponse.json(
+        { error: "Only the Owner or Admin can delete tasks." },
+        { status: 403 }
+      );
+    }
+
     const { error } = await supabase
       .from("project_tasks")
       .delete()
-      .eq("id", taskId);
+      .eq("id", taskId)
+      .eq("project_id", existingTask.project_id);
 
     if (error) {
       console.error("Task deletion error:", error);
 
       return NextResponse.json(
-        { error: error.message },
-        { status: 400 }
+        { error: "Unable to delete task." },
+        { status: 500 }
       );
     }
 
@@ -413,7 +502,7 @@ export async function DELETE(request) {
     console.error("Task DELETE error:", error);
 
     return NextResponse.json(
-      { error: error.message || "Unable to delete task." },
+      { error: "Unable to delete task." },
       { status: 500 }
     );
   }
