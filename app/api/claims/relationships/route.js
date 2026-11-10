@@ -5,6 +5,8 @@ import { createClient } from "@/lib/supabase/server";
 
 export const runtime = "nodejs";
 
+const ALLOWED_ROLES = ["owner", "admin", "contributor"];
+
 const relationshipSchema = {
   type: "OBJECT",
   properties: {
@@ -56,6 +58,7 @@ export async function POST(request) {
 
     const supabase = await createClient();
 
+    // 1. Verify logged-in user.
     const {
       data: { user },
       error: authError,
@@ -68,38 +71,58 @@ export async function POST(request) {
       );
     }
 
-    const { projectId } = await request.json();
+    // 2. Validate request.
+    const body = await request.json();
+    const { projectId } = body;
 
-    if (!projectId) {
+    if (typeof projectId !== "string" || !projectId.trim()) {
       return NextResponse.json(
         { error: "Project ID is required." },
         { status: 400 }
       );
     }
 
-    // Verify project ownership.
-    const { data: project, error: projectError } = await supabase
-      .from("projects")
-      .select("id")
-      .eq("id", projectId)
-      .eq("owner_id", user.id)
-      .single();
+    // 3. Verify project membership and retrieve role.
+    const { data: membership, error: membershipError } = await supabase
+      .from("project_members")
+      .select("role")
+      .eq("project_id", projectId)
+      .eq("user_id", user.id)
+      .maybeSingle();
 
-    if (projectError || !project) {
+    if (membershipError) {
+      console.error("Membership lookup failed:", membershipError);
+
       return NextResponse.json(
-        { error: "Project not found or access denied." },
-        { status: 404 }
+        { error: "Could not verify project membership." },
+        { status: 500 }
       );
     }
 
-    // Fetch claims belonging to this project.
+    if (!membership) {
+      return NextResponse.json(
+        { error: "You are not a member of this project." },
+        { status: 403 }
+      );
+    }
+
+    // 4. Only Owner, Admin and Contributor can run AI analysis.
+    const userRole = membership.role?.toLowerCase();
+
+    if (!ALLOWED_ROLES.includes(userRole)) {
+      return NextResponse.json(
+        { error: "Viewers cannot run AI relationship analysis." },
+        { status: 403 }
+      );
+    }
+
+    // 5. Fetch claims belonging to this project.
     const { data: claims, error: claimsError } = await supabase
       .from("knowledge_claims")
       .select(
         "id, claim_text, claim_type, evidence_quote, support_status, review_status"
       )
       .eq("project_id", projectId)
-      .eq("owner_id", user.id)
       .limit(60);
 
     if (claimsError) {
@@ -114,17 +137,17 @@ export async function POST(request) {
     if (!claims || claims.length < 2) {
       return NextResponse.json({
         success: true,
-        message: "At least two claims are required for relationship detection.",
+        message:
+          "At least two claims are required for relationship detection.",
         relationshipsCreated: 0,
       });
     }
 
-    // Retrieve existing relationships to prevent duplicates.
+    // 6. Retrieve existing project relationships.
     const { data: existing, error: existingError } = await supabase
       .from("claim_relationships")
       .select("source_claim_id, target_claim_id, relationship_type")
-      .eq("project_id", projectId)
-      .eq("owner_id", user.id);
+      .eq("project_id", projectId);
 
     if (existingError) {
       console.error("Relationship lookup error:", existingError);
@@ -156,6 +179,7 @@ export async function POST(request) {
       review_status: claim.review_status,
     }));
 
+    // 7. Initialize Gemini after authorization and data checks.
     const ai = new GoogleGenAI({
       apiKey: process.env.GEMINI_API_KEY,
     });
@@ -201,6 +225,7 @@ CLAIMS:
 ${JSON.stringify(claimData)}
 `;
 
+    // 8. Generate relationship suggestions.
     const response = await ai.models.generateContent({
       model: "gemini-3.8-flash",
       contents: prompt,
@@ -221,6 +246,7 @@ ${JSON.stringify(claimData)}
       throw new Error("Invalid relationship response.");
     }
 
+    // 9. Validate AI-generated relationships.
     const relationshipsToSave = [];
     const seenKeys = new Set();
 
@@ -262,18 +288,21 @@ ${JSON.stringify(claimData)}
     if (relationshipsToSave.length === 0) {
       return NextResponse.json({
         success: true,
-        message: "Analysis completed. No new meaningful relationships found.",
+        message:
+          "Analysis completed. No new meaningful relationships found.",
         claimsAnalyzed: claims.length,
         relationshipsCreated: 0,
       });
     }
 
-    const { data: savedRelationships, error: saveError } = await supabase
-      .from("claim_relationships")
-      .insert(relationshipsToSave)
-      .select(
-        "id, source_claim_id, target_claim_id, relationship_type, explanation, review_status"
-      );
+    // 10. Save relationships.
+    const { data: savedRelationships, error: saveError } =
+      await supabase
+        .from("claim_relationships")
+        .insert(relationshipsToSave)
+        .select(
+          "id, source_claim_id, target_claim_id, relationship_type, explanation, review_status"
+        );
 
     if (saveError) {
       console.error("Relationship save error:", saveError);

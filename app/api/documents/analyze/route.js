@@ -9,6 +9,8 @@ const CHUNK_SIZE = 60000;
 const CHUNK_OVERLAP = 500;
 const MAX_DOCUMENT_SIZE = 500000;
 
+const ALLOWED_ROLES = ["owner", "admin", "contributor"];
+
 const claimSchema = {
   type: "OBJECT",
   properties: {
@@ -114,10 +116,6 @@ export async function POST(request) {
       );
     }
 
-    const ai = new GoogleGenAI({
-      apiKey: process.env.GEMINI_API_KEY,
-    });
-
     const supabase = await createClient();
 
     // Verify logged-in user.
@@ -133,25 +131,68 @@ export async function POST(request) {
       );
     }
 
-    const { projectId, documentName } = await request.json();
+    const body = await request.json();
+    const { projectId, documentName } = body;
 
-    if (!projectId || !documentName) {
+    if (
+      typeof projectId !== "string" ||
+      !projectId.trim() ||
+      typeof documentName !== "string" ||
+      !documentName.trim()
+    ) {
       return NextResponse.json(
         { error: "Project ID and document name are required." },
         { status: 400 }
       );
     }
 
-    // Retrieve only this user's document.
+    // SECURITY: Verify project membership and retrieve the user's role.
+    const { data: membership, error: membershipError } = await supabase
+      .from("project_members")
+      .select("role")
+      .eq("project_id", projectId)
+      .eq("user_id", user.id)
+      .maybeSingle();
+
+    if (membershipError) {
+      console.error("Project membership lookup failed:", membershipError);
+
+      return NextResponse.json(
+        { error: "Could not verify project membership." },
+        { status: 500 }
+      );
+    }
+
+    if (!membership) {
+      return NextResponse.json(
+        { error: "You are not a member of this project." },
+        { status: 403 }
+      );
+    }
+
+    // Only Owner, Admin and Contributor can run AI analysis.
+    const userRole = membership.role?.toLowerCase();
+
+    if (!ALLOWED_ROLES.includes(userRole)) {
+      return NextResponse.json(
+        { error: "Viewers cannot run AI analysis." },
+        { status: 403 }
+      );
+    }
+
+    // Retrieve a document belonging to this project.
+    // Membership is verified above. Supabase RLS must also allow
+    // this authenticated user to read the document.
     const { data: document, error: documentError } = await supabase
       .from("project_documents")
       .select("id, project_id, file_name, extracted_text")
       .eq("project_id", projectId)
       .eq("file_name", documentName)
-      .eq("owner_id", user.id)
-      .single();
+      .maybeSingle();
 
     if (documentError || !document) {
+      console.error("Document retrieval failed:", documentError);
+
       return NextResponse.json(
         { error: "Document not found or access denied." },
         { status: 404 }
@@ -202,6 +243,11 @@ export async function POST(request) {
         { status: 409 }
       );
     }
+
+    // Initialize Gemini after authorization and document checks.
+    const ai = new GoogleGenAI({
+      apiKey: process.env.GEMINI_API_KEY,
+    });
 
     const chunks = splitIntoChunks(sourceText);
 
