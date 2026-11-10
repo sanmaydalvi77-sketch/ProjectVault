@@ -146,33 +146,67 @@ export async function POST(request) {
       );
     }
 
-    // SECURITY: Verify project membership and retrieve the user's role.
-    const { data: membership, error: membershipError } = await supabase
-      .from("project_members")
-      .select("role")
-      .eq("project_id", projectId)
-      .eq("user_id", user.id)
+    // Verify project ownership first.
+    const { data: project, error: projectError } = await supabase
+      .from("projects")
+      .select("id, owner_id")
+      .eq("id", projectId)
       .maybeSingle();
 
-    if (membershipError) {
-      console.error("Project membership lookup failed:", membershipError);
+    if (projectError) {
+      console.error("Project lookup failed:", projectError);
 
       return NextResponse.json(
-        { error: "Could not verify project membership." },
+        { error: "Could not verify project ownership." },
         { status: 500 }
       );
     }
 
-    if (!membership) {
+    if (!project) {
       return NextResponse.json(
-        { error: "You are not a member of this project." },
-        { status: 403 }
+        { error: "Project not found." },
+        { status: 404 }
       );
     }
 
-    // Only Owner, Admin and Contributor can run AI analysis.
-    const userRole = membership.role?.toLowerCase();
+    let userRole;
 
+    // Owners do not need a separate project_members entry.
+    if (project.owner_id === user.id) {
+      userRole = "owner";
+    } else {
+      // Check membership for non-owners.
+      const { data: membership, error: membershipError } =
+        await supabase
+          .from("project_members")
+          .select("role")
+          .eq("project_id", projectId)
+          .eq("user_id", user.id)
+          .maybeSingle();
+
+      if (membershipError) {
+        console.error(
+          "Project membership lookup failed:",
+          membershipError
+        );
+
+        return NextResponse.json(
+          { error: "Could not verify project membership." },
+          { status: 500 }
+        );
+      }
+
+      if (!membership) {
+        return NextResponse.json(
+          { error: "You are not a member of this project." },
+          { status: 403 }
+        );
+      }
+
+      userRole = membership.role?.toLowerCase();
+    }
+
+    // Only Owner, Admin and Contributor can run AI analysis.
     if (!ALLOWED_ROLES.includes(userRole)) {
       return NextResponse.json(
         { error: "Viewers cannot run AI analysis." },
@@ -181,8 +215,6 @@ export async function POST(request) {
     }
 
     // Retrieve a document belonging to this project.
-    // Membership is verified above. Supabase RLS must also allow
-    // this authenticated user to read the document.
     const { data: document, error: documentError } = await supabase
       .from("project_documents")
       .select("id, project_id, file_name, extracted_text")
@@ -203,7 +235,10 @@ export async function POST(request) {
 
     if (!sourceText) {
       return NextResponse.json(
-        { error: "Extract text from this document before analyzing it." },
+        {
+          error:
+            "Extract text from this document before analyzing it.",
+        },
         { status: 400 }
       );
     }
@@ -306,7 +341,7 @@ Chunk ${chunk.index} of ${chunks.length}:
 SOURCE TEXT:
 ${chunk.text}
 `;
-
+      console.log("Gemini claim extraction started...");
       const response = await ai.models.generateContent({
         model: "gemini-3.8-flash",
         contents: prompt,
@@ -316,6 +351,7 @@ ${chunk.text}
           temperature: 0.1,
         },
       });
+      console.log("Gemini claim extraction completed.");
 
       if (!response.text) {
         throw new Error(
@@ -353,7 +389,7 @@ ${chunk.text}
           );
         }
       }
-
+      
       // Independently verify whether evidence supports each claim.
       if (claims.length > 0) {
         const verificationResponse = await ai.models.generateContent({
