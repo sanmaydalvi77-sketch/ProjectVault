@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
-import pdf from "pdf-parse/lib/pdf-parse.js";
+import { PDFParse } from "pdf-parse";
 
 export const runtime = "nodejs";
 
@@ -77,8 +77,14 @@ export async function POST(request) {
     let extractedText = "";
 
     if (extension === "pdf") {
-      const parsedPDF = await pdf(buffer);
-      extractedText = parsedPDF.text;
+      const parser = new PDFParse({ data: buffer });
+
+try {
+  const parsedPDF = await parser.getText();
+  extractedText = parsedPDF.text;
+} finally {
+  await parser.destroy();
+}
     } else if (extension === "md" || extension === "txt") {
       extractedText = buffer.toString("utf-8");
     } else {
