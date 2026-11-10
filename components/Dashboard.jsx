@@ -46,7 +46,9 @@ export default function Home() {
       } = await supabase.auth.getUser();
 
       if (userError || !user) {
-        setProjectError("Unable to verify your login. Please log in again.");
+        setProjectError(
+          "Unable to verify your login. Please log in again."
+        );
         setLoadingProjects(false);
         return;
       }
@@ -79,40 +81,41 @@ export default function Home() {
     setSavingProject(true);
     setProjectError("");
 
-    const supabase = createClient();
+    try {
+      const response = await fetch("/api/projects", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          name: projectName.trim(),
+          description: projectDescription.trim(),
+        }),
+      });
 
-    const {
-      data: { user },
-      error: userError,
-    } = await supabase.auth.getUser();
+      const result = await response.json();
 
-    if (userError || !user) {
-      setProjectError("Your session could not be verified. Please log in again.");
+      if (!response.ok) {
+        throw new Error(
+          result.error || "Unable to create project."
+        );
+      }
+
+      setProjects((currentProjects) => [
+        result.project,
+        ...currentProjects,
+      ]);
+
+      setProjectName("");
+      setProjectDescription("");
+      setShowForm(false);
+    } catch (error) {
+      setProjectError(
+        error.message || "Unable to create project."
+      );
+    } finally {
       setSavingProject(false);
-      return;
     }
-
-    const { data, error } = await supabase
-      .from("projects")
-      .insert({
-        name: projectName.trim(),
-        description: projectDescription.trim(),
-        owner_id: user.id,
-      })
-      .select("id, name, description, created_at")
-      .single();
-
-    if (error) {
-      setProjectError(error.message);
-      setSavingProject(false);
-      return;
-    }
-
-    setProjects((currentProjects) => [data, ...currentProjects]);
-    setProjectName("");
-    setProjectDescription("");
-    setShowForm(false);
-    setSavingProject(false);
   }
 
   const features = [

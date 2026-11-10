@@ -49,6 +49,7 @@ const validTypes = [
 
 export async function POST(request) {
   try {
+    // 1. Verify Gemini API configuration.
     if (!process.env.GEMINI_API_KEY) {
       return NextResponse.json(
         { error: "Gemini API key is not configured." },
@@ -58,7 +59,7 @@ export async function POST(request) {
 
     const supabase = await createClient();
 
-    // 1. Verify logged-in user.
+    // 2. Verify logged-in user.
     const {
       data: { user },
       error: authError,
@@ -71,18 +72,63 @@ export async function POST(request) {
       );
     }
 
-    // 2. Validate request.
-    const body = await request.json();
-    const { projectId } = body;
+    // 3. Validate request body.
+    let body;
 
-    if (typeof projectId !== "string" || !projectId.trim()) {
+    try {
+      body = await request.json();
+    } catch {
       return NextResponse.json(
-        { error: "Project ID is required." },
+        { error: "Invalid request body." },
         { status: 400 }
       );
     }
 
-    // 3. Verify project membership and retrieve role.
+    if (!body || typeof body !== "object" || Array.isArray(body)) {
+      return NextResponse.json(
+        { error: "Invalid request body." },
+        { status: 400 }
+      );
+    }
+
+    const { projectId } = body;
+
+    if (
+      typeof projectId !== "string" ||
+      !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(
+        projectId
+      )
+    ) {
+      return NextResponse.json(
+        { error: "A valid project ID is required." },
+        { status: 400 }
+      );
+    }
+
+    // 4. Verify project ownership.
+    const { data: project, error: projectError } = await supabase
+      .from("projects")
+      .select("owner_id")
+      .eq("id", projectId)
+      .maybeSingle();
+
+    if (projectError) {
+      console.error("Project lookup failed:", projectError);
+
+      return NextResponse.json(
+        { error: "Could not verify project ownership." },
+        { status: 500 }
+      );
+    }
+
+    if (!project) {
+      return NextResponse.json(
+        { error: "Project not found or access denied." },
+        { status: 404 }
+      );
+    }
+
+    // 5. Retrieve project membership.
     const { data: membership, error: membershipError } = await supabase
       .from("project_members")
       .select("role")
@@ -99,24 +145,23 @@ export async function POST(request) {
       );
     }
 
-    if (!membership) {
+    // 6. Determine the user's actual role.
+    const userRole =
+      project.owner_id === user.id
+        ? "owner"
+        : membership?.role?.toLowerCase();
+
+    if (!userRole || !ALLOWED_ROLES.includes(userRole)) {
       return NextResponse.json(
-        { error: "You are not a member of this project." },
+        {
+          error:
+            "You do not have permission to run AI relationship analysis.",
+        },
         { status: 403 }
       );
     }
 
-    // 4. Only Owner, Admin and Contributor can run AI analysis.
-    const userRole = membership.role?.toLowerCase();
-
-    if (!ALLOWED_ROLES.includes(userRole)) {
-      return NextResponse.json(
-        { error: "Viewers cannot run AI relationship analysis." },
-        { status: 403 }
-      );
-    }
-
-    // 5. Fetch claims belonging to this project.
+    // 7. Fetch claims belonging to this project.
     const { data: claims, error: claimsError } = await supabase
       .from("knowledge_claims")
       .select(
@@ -143,7 +188,7 @@ export async function POST(request) {
       });
     }
 
-    // 6. Retrieve existing project relationships.
+    // 8. Retrieve existing project relationships.
     const { data: existing, error: existingError } = await supabase
       .from("claim_relationships")
       .select("source_claim_id, target_claim_id, relationship_type")
@@ -179,7 +224,7 @@ export async function POST(request) {
       review_status: claim.review_status,
     }));
 
-    // 7. Initialize Gemini after authorization and data checks.
+    // 9. Initialize Gemini after authorization and data checks.
     const ai = new GoogleGenAI({
       apiKey: process.env.GEMINI_API_KEY,
     });
@@ -225,7 +270,7 @@ CLAIMS:
 ${JSON.stringify(claimData)}
 `;
 
-    // 8. Generate relationship suggestions.
+    // 10. Generate relationship suggestions.
     const response = await ai.models.generateContent({
       model: "gemini-3.8-flash",
       contents: prompt,
@@ -242,16 +287,21 @@ ${JSON.stringify(claimData)}
 
     const result = JSON.parse(response.text);
 
-    if (!Array.isArray(result.relationships)) {
+    if (
+      !result ||
+      typeof result !== "object" ||
+      !Array.isArray(result.relationships)
+    ) {
       throw new Error("Invalid relationship response.");
     }
 
-    // 9. Validate AI-generated relationships.
+    // 11. Validate AI-generated relationships.
     const relationshipsToSave = [];
     const seenKeys = new Set();
 
     for (const item of result.relationships) {
       if (
+        !item ||
         !claimIds.has(item.source_claim_id) ||
         !claimIds.has(item.target_claim_id) ||
         item.source_claim_id === item.target_claim_id ||
@@ -280,7 +330,7 @@ ${JSON.stringify(claimData)}
         source_claim_id: item.source_claim_id,
         target_claim_id: item.target_claim_id,
         relationship_type: item.relationship_type,
-        explanation: item.explanation.trim(),
+        explanation: item.explanation.trim().slice(0, 500),
         review_status: "pending",
       });
     }
@@ -295,7 +345,7 @@ ${JSON.stringify(claimData)}
       });
     }
 
-    // 10. Save relationships.
+    // 12. Save relationships.
     const { data: savedRelationships, error: saveError } =
       await supabase
         .from("claim_relationships")
@@ -324,10 +374,7 @@ ${JSON.stringify(claimData)}
     console.error("Relationship analysis error:", error);
 
     return NextResponse.json(
-      {
-        error:
-          error.message || "Relationship analysis failed.",
-      },
+      { error: "Relationship analysis failed. Please try again." },
       { status: 500 }
     );
   }
