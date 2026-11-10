@@ -104,32 +104,56 @@ export default function KnowledgeLedger({ projectId }) {
   }
 
   async function updateRelationship(relationshipId, reviewStatus) {
-    const action =
-      reviewStatus === "confirmed" ? "confirm" : "dismiss";
+  if (!["confirmed", "dismissed"].includes(reviewStatus)) {
+    setError("Invalid relationship review action.");
+    return;
+  }
 
-    const verified = window.confirm(
-      `Are you sure you want to ${action} this AI-suggested relationship?`
+  const action =
+    reviewStatus === "confirmed" ? "confirm" : "dismiss";
+
+  const verified = window.confirm(
+    `Are you sure you want to ${action} this AI-suggested relationship?`
+  );
+
+  if (!verified) return;
+
+  setUpdatingId(relationshipId);
+  setError("");
+
+  try {
+    const response = await fetch(
+      "/api/claims/relationships/review",
+      {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          projectId,
+          relationshipId,
+          reviewStatus,
+        }),
+      }
     );
 
-    if (!verified) return;
+    const result = await response.json();
 
-    setUpdatingId(relationshipId);
-    setError("");
-
-    const { error } = await supabase
-      .from("claim_relationships")
-      .update({ review_status: reviewStatus })
-      .eq("id", relationshipId)
-      .eq("project_id", projectId);
-
-    if (error) {
-      setError(error.message);
-    } else {
-      await loadRelationships();
+    if (!response.ok) {
+      throw new Error(
+        result.error || "Unable to update relationship review."
+      );
     }
 
+    await loadRelationships();
+  } catch (error) {
+    setError(
+      error.message || "Unable to update relationship review."
+    );
+  } finally {
     setUpdatingId(null);
   }
+}
 
 async function updateReview(claimId, reviewStatus) {
   if (!["approved", "rejected"].includes(reviewStatus)) {
