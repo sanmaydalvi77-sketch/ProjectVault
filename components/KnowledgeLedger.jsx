@@ -131,54 +131,58 @@ export default function KnowledgeLedger({ projectId }) {
     setUpdatingId(null);
   }
 
-  async function updateReview(claimId, reviewStatus) {
-    let supportStatus;
+async function updateReview(claimId, reviewStatus) {
+  if (!["approved", "rejected"].includes(reviewStatus)) {
+    setError("Invalid review action.");
+    return;
+  }
 
-    if (reviewStatus === "approved") {
-      const verified = window.confirm(
-        "Have you personally checked the supporting evidence and confirmed that it supports this claim?"
-      );
-
-      if (!verified) return;
-
-      supportStatus = "supported";
-    }
-
-    const notes = window.prompt(
-      reviewStatus === "approved"
-        ? "Add optional approval notes:"
-        : "Why are you rejecting this claim?"
+  if (reviewStatus === "approved") {
+    const verified = window.confirm(
+      "Have you personally checked the supporting evidence and confirmed that it supports this claim?"
     );
 
-    if (notes === null) return;
+    if (!verified) return;
+  }
 
-    setUpdatingId(claimId);
-    setError("");
+  const notes = window.prompt(
+    reviewStatus === "approved"
+      ? "Add optional approval notes:"
+      : "Why are you rejecting this claim?"
+  );
 
-    const updates = {
-      review_status: reviewStatus,
-      reviewer_notes: notes,
-      updated_at: new Date().toISOString(),
-    };
+  if (notes === null) return;
 
-    if (supportStatus) {
-      updates.support_status = supportStatus;
+  setUpdatingId(claimId);
+  setError("");
+
+  try {
+    const response = await fetch("/api/claims/review", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        projectId,
+        claimId,
+        reviewStatus,
+        notes,
+      }),
+    });
+
+    const result = await response.json();
+
+    if (!response.ok) {
+      throw new Error(result.error || "Unable to update claim review.");
     }
 
-    const { error } = await supabase
-      .from("knowledge_claims")
-      .update(updates)
-      .eq("id", claimId)
-      .eq("project_id", projectId);
-
-    if (error) {
-      setError(error.message);
-    } else {
-      await loadClaims();
-    }
-
+    await loadClaims();
+  } catch (error) {
+    setError(error.message || "Unable to update claim review.");
+  } finally {
     setUpdatingId(null);
   }
+}
 
   const supportedCount = claims.filter(
     (claim) => claim.support_status === "supported"
